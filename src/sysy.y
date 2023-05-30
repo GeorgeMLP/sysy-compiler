@@ -74,6 +74,7 @@ Stmt
         auto stmt = new StmtAST();
         auto number = new string(to_string($2));
         stmt->stmt = "return " + *number + ";";
+        stmt->ret_num = ($2);
         $$ = stmt;
     }
     ;

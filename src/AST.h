@@ -95,6 +95,7 @@ class StmtAST: public BaseAST
 {
 public:
     std::string stmt;
+    int ret_num;
     void dump() const override
     {
         std::cout << "StmtAST { ";
@@ -103,6 +104,6 @@ public:
     }
     void dumpIR() const override
     {
-        std::cout << "\tret 0" << std::endl;
+        std::cout << "\tret " << ret_num << std::endl;
     }
 };
