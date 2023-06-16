@@ -49,9 +49,10 @@ int main(int argc, const char *argv[])
         koopa_raw_program_t raw = koopa_build_raw_program(builder, program);
         koopa_delete_program(program);
         freopen(output, "w", stdout);
-        visit(raw);
+        Visit(raw);
         koopa_delete_raw_program_builder(builder);
     }
+    else if (string(mode) == "-test")ast->dump();
     else cout << "NotImplementedError" << endl;
     cout << endl;
     return 0;
