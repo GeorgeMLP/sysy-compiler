@@ -26,6 +26,7 @@ static std::map<std::string, std::string> function_ret_type;
 static std::map<std::string, int> function_param_num;
 static std::map<std::string, std::vector<std::string>> function_param_idents;
 static std::map<std::string, std::vector<std::string>> function_param_names;
+static std::string present_func_type;
 
 
 static std::variant<int, std::string> look_up_symbol_tables(std::string l_val)
@@ -63,13 +64,43 @@ public:
     }
     std::string dumpIR() const override
     {
+        std::cout << "decl @getint(): i32" << std::endl;
+        std::cout << "decl @getch(): i32" << std::endl;
+        std::cout << "decl @getarray(*i32): i32" << std::endl;
+        std::cout << "decl @putint(i32)" << std::endl;
+        std::cout << "decl @putch(i32)" << std::endl;
+        std::cout << "decl @putarray(i32, *i32)" << std::endl;
+        std::cout << "decl @starttime()" << std::endl;
+        std::cout << "decl @stoptime()" << std::endl << std::endl;
+        function_table["getint"] = "@getint";
+        function_table["getch"] = "@getch";
+        function_table["getarray"] = "@getarray";
+        function_table["putint"] = "@putint";
+        function_table["putch"] = "@putch";
+        function_table["putarray"] = "@putarray";
+        function_table["starttime"] = "@starttime";
+        function_table["stoptime"] = "@stoptime";
+        function_ret_type["getint"] = "int";
+        function_ret_type["getch"] = "int";
+        function_ret_type["getarray"] = "int";
+        function_ret_type["putint"] = "void";
+        function_ret_type["putch"] = "void";
+        function_ret_type["putarray"] = "void";
+        function_ret_type["starttime"] = "void";
+        function_ret_type["stoptime"] = "void";
+        function_param_num["getint"] = 0;
+        function_param_num["getch"] = 0;
+        function_param_num["getarray"] = 1;
+        function_param_num["putint"] = 1;
+        function_param_num["putch"] = 1;
+        function_param_num["putarray"] = 2;
+        function_param_num["starttime"] = 0;
+        function_param_num["stoptime"] = 0;
         std::map<std::string, std::variant<int, std::string>> global_syms;
-        // handle decl_list
         symbol_tables.push_back(global_syms);
-        for (auto&& func_def : func_def_list)
-        {
-            func_def->dumpIR(); std::cout << std::endl << std::endl;
-        }
+        for (auto&& decl : decl_list)decl->dumpExp();
+        std::cout << std::endl;
+        for (auto&& func_def : func_def_list)func_def->dumpIR();
         symbol_tables.pop_back();
         return "";
     }
@@ -115,20 +146,20 @@ public:
     }
     std::string dumpIR() const override
     {
-        std::string func_name = "@" + ident;
-        std::string name = func_name + "_" +
-            std::to_string(var_num[func_name]++);
+        std::string name = "@" + ident;
         assert(!symbol_tables[0].count(ident));
         assert(!function_table.count(ident));
         function_table[ident] = name;
         function_ret_type[ident] = func_type;
         function_param_num[ident] = params.size();
+        present_func_type = func_type;
         std::vector<std::string> idents, names;
         std::cout << "fun " << name << "(";
         for (int i = 0; i < params.size(); i++)
         {
             idents.push_back(params[i]->get_ident());
             names.push_back(params[i]->dumpIR());
+            std::cout << ": i32";
             if (i != params.size() - 1)std::cout << ", ";
         }
         function_param_idents[ident] = move(idents);
@@ -145,7 +176,7 @@ public:
             else if (func_type == "void")std::cout << "\tret" << std::endl;
             else assert(false);
         }
-        std::cout << "}";
+        std::cout << "}" << std::endl << std::endl;
         return block_type;
     }
 };
@@ -346,11 +377,16 @@ public:
     {
         if (type == SimpleStmtType::ret)
         {
-            if (block_exp == nullptr)std::cout << '\t' << "ret" << std::endl;
+            if (block_exp == nullptr)
+            {
+                if (present_func_type == "int")
+                    std::cout << "\tret 0" << std::endl;
+                else std::cout << "\tret" << std::endl;
+            }
             else
             {
                 std::string result_var = block_exp->dumpIR();
-                std::cout << '\t' << "ret " << result_var << std::endl;
+                std::cout << "\tret " << result_var << std::endl;
             }
             return "ret";
         }
@@ -900,14 +936,9 @@ class DeclAST : public BaseAST
 public:
     DeclType type;
     std::unique_ptr<BaseAST> decl;
-    void dump() const override
-    {
-        decl->dump();
-    }
-    std::string dumpIR() const override
-    {
-        return decl->dumpIR();
-    }
+    void dump() const override { decl->dump(); }
+    std::string dumpIR() const override { return decl->dumpIR(); }
+    int dumpExp() const override { return decl->dumpExp(); }
 };
 
 
@@ -927,6 +958,7 @@ public:
         for (auto&& const_def : const_def_list)const_def->dumpIR();
         return "";
     }
+    int dumpExp() const override { dumpIR(); return 0; }
 };
 
 
@@ -953,10 +985,7 @@ class ConstInitValAST : public BaseAST
 {
 public:
     std::unique_ptr<BaseAST> const_exp;
-    void dump() const override
-    {
-        std::cout << const_exp->dumpExp();
-    }
+    void dump() const override { std::cout << const_exp->dumpExp(); }
     std::string dumpIR() const override
     {
         return std::to_string(const_exp->dumpExp());
@@ -969,14 +998,8 @@ class BlockItemAST : public BaseAST
 public:
     BlockItemType type;
     std::unique_ptr<BaseAST> content;
-    void dump() const override
-    {
-        content->dump();
-    }
-    std::string dumpIR() const override
-    {
-        return content->dumpIR();
-    }
+    void dump() const override { content->dump(); }
+    std::string dumpIR() const override { return content->dumpIR(); }
 };
 
 
@@ -984,18 +1007,12 @@ class ConstExpAST : public BaseAST
 {
 public:
     std::unique_ptr<BaseAST> exp;
-    void dump() const override
-    {
-        std::cout << exp->dumpExp();
-    }
+    void dump() const override { std::cout << exp->dumpExp(); }
     std::string dumpIR() const override
     {
         return std::to_string(exp->dumpExp());
     }
-    virtual int dumpExp() const override
-    {
-        return exp->dumpExp();
-    }
+    virtual int dumpExp() const override { return exp->dumpExp(); }
 };
 
 
@@ -1014,6 +1031,12 @@ public:
         assert(b_type == "int");
         for (auto&& var_def : var_def_list)var_def->dumpIR();
         return "";
+    }
+    int dumpExp() const override
+    {
+        assert(b_type == "int");
+        for (auto&& var_def : var_def_list)var_def->dumpExp();
+        return 0;
     }
 };
 
@@ -1048,6 +1071,25 @@ public:
         }
         return "";
     }
+    int dumpExp() const override
+    {
+        std::string var_name = "@" + ident;
+        std::string name = var_name + "_" +
+            std::to_string(var_num[var_name]++);
+        symbol_tables.back()[ident] = name;
+        if (has_init_val)
+        {
+            std::string val_var = init_val->dumpIR();
+            std::cout << "global " << name << " = alloc i32, ";
+            if (val_var[0] == '@' || val_var[0] == '%')assert(false);
+            else if (val_var != "0")std::cout << val_var << std::endl;
+            else std::cout << "zeroinit" << std::endl;
+        }
+        else
+            std::cout << "global " << name << " = alloc i32, zeroinit" <<
+                std::endl;
+        return 0;
+    }
 };
 
 
@@ -1055,12 +1097,6 @@ class InitValAST : public BaseAST
 {
 public:
     std::unique_ptr<BaseAST> exp;
-    void dump() const override
-    {
-        exp->dump();
-    }
-    std::string dumpIR() const override
-    {
-        return exp->dumpIR();
-    }
+    void dump() const override { exp->dump(); }
+    std::string dumpIR() const override { return exp->dumpIR(); }
 };
