@@ -11,21 +11,30 @@
 static int symbol_num = 0;
 static int if_else_num = 0;
 static int while_num = 0;
+static int const_list_num = 0;
+static int var_list_num = 0;
+enum class FuncFParamType { var, list };
 enum class UnaryExpType { primary, unary, func_call };
-enum class PrimaryExpType { exp, number, lval };
+enum class PrimaryExpType { exp, number, lval, list };
 enum class StmtType { if_, ifelse, simple, while_ };
-enum class SimpleStmtType { lval, exp, block, ret, break_, continue_ };
+enum class SimpleStmtType { lval, exp, block, ret, break_, continue_, list };
 enum class DeclType { const_decl, var_decl };
+enum class ConstInitValType { const_exp, list };
 enum class BlockItemType { decl, stmt };
+enum class InitValType { exp, list };
 static std::vector<std::map<std::string, std::variant<int, std::string>>>
     symbol_tables;
 static std::map<std::string, int> var_num;
+static std::map<std::string, int> is_list;
+static std::map<std::string, int> is_func_param;
+static std::map<std::string, int> list_dim;
 static std::vector<int> while_stack;
 static std::map<std::string, std::string> function_table;
 static std::map<std::string, std::string> function_ret_type;
 static std::map<std::string, int> function_param_num;
 static std::map<std::string, std::vector<std::string>> function_param_idents;
 static std::map<std::string, std::vector<std::string>> function_param_names;
+static std::map<std::string, std::vector<std::string>> function_param_types;
 static std::string present_func_type;
 
 
@@ -47,6 +56,9 @@ public:
     virtual std::string dumpIR() const = 0;
     virtual int dumpExp() const { assert(false); return -1; }
     virtual std::string get_ident() const { assert(false); return ""; }
+    virtual std::string get_type() const { assert(false); return ""; }
+    virtual int get_dim() const { assert(false); return -1; }
+    virtual std::vector<int> dumpList(std::vector<int>) const { exit(1); }
 };
 
 
@@ -110,9 +122,11 @@ public:
 class FuncFParamAST : public BaseAST
 {
 public:
+    FuncFParamType type;
     std::string b_type;
     std::string ident;
-    void dump() const override { std::cout << b_type << " " << ident; }
+    std::vector<std::unique_ptr<BaseAST>> const_exp_list;
+    void dump() const override { std::cout << get_type() << " " << ident; }
     std::string dumpIR() const override
     {
         assert(b_type == "int");
@@ -123,6 +137,23 @@ public:
         return name;
     }
     std::string get_ident() const override { return ident; }
+    std::string dumpListType(std::vector<int> widths) const
+    {
+        if (widths.size() == 0)return "i32";
+        std::vector<int> rec = std::vector<int>(widths.begin() + 1,
+            widths.end());
+        return "[" + dumpListType(rec) + ", " + std::to_string(widths.front())
+            + "]";
+    }
+    std::string get_type() const override
+    {
+        if (type == FuncFParamType::var)return "i32";
+        std::vector<int> widths;
+        for (auto&& const_exp : const_exp_list)
+            widths.push_back(std::stoi(const_exp->dumpIR()));
+        return "*" + dumpListType(widths);
+    }
+    int get_dim() const override { return const_exp_list.size() + 1; }
 };
 
 
@@ -153,17 +184,24 @@ public:
         function_ret_type[ident] = func_type;
         function_param_num[ident] = params.size();
         present_func_type = func_type;
-        std::vector<std::string> idents, names;
+        std::vector<std::string> idents, names, types;
         std::cout << "fun " << name << "(";
         for (int i = 0; i < params.size(); i++)
         {
             idents.push_back(params[i]->get_ident());
             names.push_back(params[i]->dumpIR());
-            std::cout << ": i32";
+            types.push_back(params[i]->get_type());
+            if (types.back() != "i32")
+            {
+                std::string tmp = names.back(); tmp[0] = '%';
+                list_dim[tmp] = params[i]->get_dim();
+            }
+            std::cout << ": " << params[i]->get_type();
             if (i != params.size() - 1)std::cout << ", ";
         }
         function_param_idents[ident] = move(idents);
         function_param_names[ident] = move(names);
+        function_param_types[ident] = move(types);
         std::cout << ")";
         if (func_type == "int")std::cout << ": i32";
         else if (func_type != "void")assert(false);
@@ -201,12 +239,15 @@ public:
         {
             std::vector<std::string> idents = function_param_idents[func];
             std::vector<std::string> names = function_param_names[func];
+            std::vector<std::string> types = function_param_types[func];
             for (int i = 0; i < names.size(); i++)
             {
                 std::string ident = idents[i];
                 std::string name = names[i]; name[0] = '%';
                 symbol_table[ident] = name;
-                std::cout << '\t' << name << " = alloc i32" << std::endl;
+                is_func_param[name] = 1;
+                std::cout << '\t' << name << " = alloc ";
+                std::cout << types[i] << std::endl;
                 std::cout << "\tstore " << names[i] << ", " << name <<
                     std::endl;
             }
@@ -274,8 +315,8 @@ public:
         else if (type == StmtType::if_)
         {
             std::string if_result = exp_simple->dumpIR();
-            std::string then_label = "\%then_" + std::to_string(if_else_num);
-            std::string end_label = "\%end_" + std::to_string(if_else_num++);
+            std::string then_label = "\%then__" + std::to_string(if_else_num);
+            std::string end_label = "\%end__" + std::to_string(if_else_num++);
             std::cout << "\tbr " << if_result << ", " << then_label << ", " <<
                 end_label << std::endl;
             std::cout << then_label << ":" << std::endl;
@@ -288,9 +329,9 @@ public:
         else if (type == StmtType::ifelse)
         {
             std::string if_result = exp_simple->dumpIR();
-            std::string then_label = "\%then_" + std::to_string(if_else_num);
-            std::string else_label = "\%else_" + std::to_string(if_else_num);
-            std::string end_label = "\%end_" + std::to_string(if_else_num++);
+            std::string then_label = "\%then__" + std::to_string(if_else_num);
+            std::string else_label = "\%else__" + std::to_string(if_else_num);
+            std::string end_label = "\%end__" + std::to_string(if_else_num++);
             std::cout << "\tbr " << if_result << ", " << then_label << ", " <<
                 else_label << std::endl;
             std::cout << then_label << ":" << std::endl;
@@ -311,9 +352,9 @@ public:
         }
         else if (type == StmtType::while_)
         {
-            std::string entry_label = "\%while_" + std::to_string(while_num);
-            std::string body_label = "\%do_" + std::to_string(while_num);
-            std::string end_label = "\%while_end_" + std::to_string(while_num);
+            std::string entry_label = "\%while__" + std::to_string(while_num);
+            std::string body_label = "\%do__" + std::to_string(while_num);
+            std::string end_label = "\%while_end__" + std::to_string(while_num);
             while_stack.push_back(while_num++);
             std::cout << "\tjump " << entry_label << std::endl;
             std::cout << entry_label << ":" << std::endl;
@@ -339,6 +380,7 @@ class SimpleStmtAST : public BaseAST
 public:
     SimpleStmtType type;
     std::string lval;
+    std::vector<std::unique_ptr<BaseAST>> exp_list;
     std::unique_ptr<BaseAST> block_exp;
     void dump() const override
     {
@@ -351,6 +393,17 @@ public:
         else if (type == SimpleStmtType::lval)
         {
             std::cout << "LVAL { " << lval << " = ";
+            block_exp->dump();
+            std::cout << " } ";
+        }
+        else if (type == SimpleStmtType::list)
+        {
+            std::cout << "LVAL { " << lval;
+            for (auto&& exp : exp_list)
+            {
+                std::cout << '['; exp->dump(); std::cout << ']';
+            }
+            std::cout << " = ";
             block_exp->dump();
             std::cout << " } ";
         }
@@ -398,6 +451,33 @@ public:
             std::cout << "\tstore " << result_var << ", " <<
                 std::get<std::string>(value) << std::endl;
         }
+        else if (type == SimpleStmtType::list)
+        {
+            std::variant<int, std::string> value = look_up_symbol_tables(lval);
+            assert(value.index() == 1);
+            std::string result_var, name, prev = std::get<std::string>(value);
+            assert(list_dim[prev] == exp_list.size());
+            for (auto&& exp : exp_list)
+            {
+                result_var = exp->dumpIR();
+                name = "%" + std::to_string(symbol_num++);
+                if (is_func_param[prev])
+                {
+                    std::cout << '\t' << name << " = load " << prev <<
+                        std::endl;
+                    std::string tmp = "%" + std::to_string(symbol_num++);
+                    std::cout << '\t' << tmp << " = getptr " << name << ", "
+                        << result_var << std::endl;
+                    name = tmp;
+                }
+                else
+                    std::cout << '\t' << name << " = getelemptr " << prev <<
+                        ", " << result_var << std::endl;
+                prev = name;
+            }
+            result_var = block_exp->dumpIR();
+            std::cout << "\tstore " << result_var << ", " << prev << std::endl;
+        }
         else if (type == SimpleStmtType::exp)
         {
             if (block_exp != nullptr)block_exp->dumpIR();
@@ -407,7 +487,7 @@ public:
         {
             assert(!while_stack.empty());
             int while_no = while_stack.back();
-            std::string end_label = "\%while_end_" + std::to_string(while_no);
+            std::string end_label = "\%while_end__" + std::to_string(while_no);
             std::cout << "\tjump " << end_label << std::endl;
             return "break";
         }
@@ -415,7 +495,7 @@ public:
         {
             assert(!while_stack.empty());
             int while_no = while_stack.back();
-            std::string entry_label = "\%while_" + std::to_string(while_no);
+            std::string entry_label = "\%while__" + std::to_string(while_no);
             std::cout << "\tjump " << entry_label << std::endl;
             return "cont";
         }
@@ -469,9 +549,9 @@ public:
         else if (op == "||")
         {
             std::string left_result = l_or_exp->dumpIR();
-            std::string then_label = "\%then_" + std::to_string(if_else_num);
-            std::string else_label = "\%else_" + std::to_string(if_else_num);
-            std::string end_label = "\%end_" + std::to_string(if_else_num++);
+            std::string then_label = "\%then__" + std::to_string(if_else_num);
+            std::string else_label = "\%else__" + std::to_string(if_else_num);
+            std::string end_label = "\%end__" + std::to_string(if_else_num++);
             std::string result_var_ptr = "%" + std::to_string(symbol_num++);
             std::cout << '\t' << result_var_ptr << " = alloc i32" << std::endl;
             std::cout << "\tbr " << left_result << ", " << then_label << ", "
@@ -534,9 +614,9 @@ public:
         else if (op == "&&")
         {
             std::string left_result = l_and_exp->dumpIR();
-            std::string then_label = "\%then_" + std::to_string(if_else_num);
-            std::string else_label = "\%else_" + std::to_string(if_else_num);
-            std::string end_label = "\%end_" + std::to_string(if_else_num++);
+            std::string then_label = "\%then__" + std::to_string(if_else_num);
+            std::string else_label = "\%else__" + std::to_string(if_else_num);
+            std::string end_label = "\%end__" + std::to_string(if_else_num++);
             std::string result_var_ptr = "%" + std::to_string(symbol_num++);
             std::cout << '\t' << result_var_ptr << " = alloc i32" << std::endl;
             std::cout << "\tbr " << left_result << ", " << then_label << ", "
@@ -885,12 +965,21 @@ public:
     PrimaryExpType type;
     std::unique_ptr<BaseAST> exp;
     std::string lval;
+    std::vector<std::unique_ptr<BaseAST>> exp_list;
     int number;
     void dump() const override
     {
         if (type == PrimaryExpType::exp)exp->dump();
         else if (type == PrimaryExpType::number)std::cout << number;
         else if (type == PrimaryExpType::lval)std::cout << lval;
+        else if (type == PrimaryExpType::list)
+        {
+            std::cout << lval;
+            for (auto&& exp : exp_list)
+            {
+                std::cout << '['; exp->dump(); std::cout << ']';
+            }
+        }
         else assert(false);
     }
     std::string dumpIR() const override
@@ -904,12 +993,57 @@ public:
             std::variant<int, std::string> value = look_up_symbol_tables(lval);
             if (value.index() == 0)
                 result_var = std::to_string(std::get<int>(value));
+            else if (is_list[std::get<std::string>(value)])
+            {
+                result_var = "%" + std::to_string(symbol_num++);
+                std::cout << '\t' << result_var << " = getelemptr " <<
+                    std::get<std::string>(value) << ", 0" << std::endl;
+            }
             else
             {
                 result_var = "%" + std::to_string(symbol_num++);
                 std::cout << '\t' << result_var << " = load " <<
                     std::get<std::string>(value) << std::endl;
             }
+        }
+        else if (type == PrimaryExpType::list)
+        {
+            std::variant<int, std::string> value = look_up_symbol_tables(lval);
+            assert(value.index() == 1);
+            std::string name, prev = std::get<std::string>(value);
+            int dim = list_dim[prev];
+            bool list = is_list[prev], func_param = is_func_param[prev];
+            for (auto&& exp : exp_list)
+            {
+                result_var = exp->dumpIR();
+                name = "%" + std::to_string(symbol_num++);
+                if (is_func_param[prev])
+                {
+                    std::cout << '\t' << name << " = load " << prev <<
+                        std::endl;
+                    std::string tmp = "%" + std::to_string(symbol_num++);
+                    std::cout << '\t' << tmp << " = getptr " << name <<
+                        ", " << result_var << std::endl;
+                    name = tmp;
+                }
+                else
+                    std::cout << '\t' << name << " = getelemptr " << prev <<
+                        ", " << result_var << std::endl;
+                prev = name;
+            }
+            if (exp_list.size() == dim)
+            {
+                result_var = "%" + std::to_string(symbol_num++);
+                std::cout << '\t' << result_var << " = load " << prev <<
+                    std::endl;
+            }
+            else if (list || func_param)
+            {
+                result_var = "%" + std::to_string(symbol_num++);
+                std::cout << '\t' << result_var << " = getelemptr " << prev <<
+                    ", 0" << std::endl;
+            }
+            else result_var = name;
         }
         else assert(false);
         return result_var;
@@ -958,7 +1092,12 @@ public:
         for (auto&& const_def : const_def_list)const_def->dumpIR();
         return "";
     }
-    int dumpExp() const override { dumpIR(); return 0; }
+    int dumpExp() const override
+    {
+        assert(b_type == "int");
+        for (auto&& const_def : const_def_list)const_def->dumpExp();
+        return 0;
+    }
 };
 
 
@@ -966,6 +1105,7 @@ class ConstDefAST : public BaseAST
 {
 public:
     std::string ident;
+    std::vector<std::unique_ptr<BaseAST>> const_exp_list;
     std::unique_ptr<BaseAST> const_init_val;
     void dump() const override
     {
@@ -973,10 +1113,120 @@ public:
         const_init_val->dump();
         std::cout << "} ";
     }
+    void dumpListType(std::vector<int> widths) const
+    {
+        if (widths.size() == 1)
+        {
+            std::cout << "[i32, " << widths[0] << "]"; return;
+        }
+        std::vector<int> rec = std::vector<int>(widths.begin() + 1,
+            widths.end());
+        std::cout << "["; dumpListType(rec);
+        std::cout << ", " << widths.front() << "]";
+    }
+    int calIndex(std::vector<int> widths, int depth)
+    {
+        int total_index = const_list_num;
+        std::vector<int> products = widths;
+        for (int i = products.size() - 2; i >= 0; i--)
+            products[i] *= products[i + 1];
+        std::vector<int> remainders = widths;
+        for (int i = 0; i < remainders.size() - 1; i++)
+        {
+            remainders[i] = total_index / products[i + 1];
+            total_index -= remainders[i] * products[i + 1];
+        }
+        remainders[remainders.size() - 1] = total_index;
+        return remainders[depth];
+    }
+    void dumpListInit(std::string prev, std::vector<int> widths, int depth,
+        std::vector<int> init_list) const
+    {
+        if (depth >= widths.size())
+        {
+            std::cout << "\tstore " << init_list[const_list_num++] << ", " <<
+                prev << std::endl;
+            return;
+        }
+        for (int i = 0; i < widths[depth]; i++)
+        {
+            std::string result_var = "%" + std::to_string(symbol_num++);
+            std::cout << '\t' << result_var << " = getelemptr " << prev << ", "
+                << i << std::endl;
+            dumpListInit(result_var, widths, depth + 1, init_list);
+        }
+    }
+    void printInitList(std::vector<int> widths, int depth,
+        std::vector<int> init_list) const
+    {
+        if (depth >= widths.size())
+        {
+            std::cout << init_list[const_list_num++]; return;
+        }
+        std::cout << "{";
+        for (int i = 0; i < widths[depth]; i++)
+        {
+            printInitList(widths, depth + 1, init_list);
+            if (i != widths[depth] - 1)std::cout << ", ";
+        }
+        std::cout << "}";
+    }
     std::string dumpIR() const override
     {
-        symbol_tables.back()[ident] = std::stoi(const_init_val->dumpIR());
+        if (const_exp_list.empty())
+            symbol_tables.back()[ident] = std::stoi(const_init_val->dumpIR());
+        else
+        {
+            std::vector<int> widths, init_list;
+            for (auto&& const_exp : const_exp_list)
+                widths.push_back(std::stoi(const_exp->dumpIR()));
+            const_list_num = 0;
+            init_list = const_init_val->dumpList(widths);
+            std::string var_name = "@" + ident;
+            std::string name = var_name + "_" +
+                std::to_string(var_num[var_name]++);
+            symbol_tables.back()[ident] = name;
+            is_list[name] = 1;
+            list_dim[name] = widths.size();
+            std::cout << '\t' << name << " = alloc ";
+            dumpListType(widths);
+            std::cout << std::endl;
+            const_list_num = 0;
+            for (int i = 0; i < widths[0]; i++)
+            {
+                std::string result_var = "%" + std::to_string(symbol_num++);
+                std::cout << '\t' << result_var << " = getelemptr " << name <<
+                    ", " << i << std::endl;
+                dumpListInit(result_var, widths, 1, init_list);
+            }
+        }
         return "";
+    }
+    int dumpExp() const override
+    {
+        if (const_exp_list.empty())
+            symbol_tables.back()[ident] = std::stoi(const_init_val->dumpIR());
+        else
+        {
+            std::vector<int> widths, init_list;
+            for (auto&& const_exp : const_exp_list)
+                widths.push_back(std::stoi(const_exp->dumpIR()));
+            const_list_num = 0;
+            init_list = const_init_val->dumpList(widths);
+            std::string var_name = "@" + ident;
+            std::string name = var_name + "_" +
+                std::to_string(var_num[var_name]++);
+            symbol_tables.back()[ident] = name;
+            is_list[name] = 1;
+            list_dim[name] = widths.size();
+            std::cout << "global " << name << " = alloc ";
+            dumpListType(widths);
+            std::cout << ", ";
+            const_list_num = 0;
+            printInitList(widths, 0, init_list);
+            std::cout << std::endl;
+        }
+        return 0;
     }
 };
 
@@ -984,11 +1234,82 @@ public:
 class ConstInitValAST : public BaseAST
 {
 public:
+    ConstInitValType type;
     std::unique_ptr<BaseAST> const_exp;
-    void dump() const override { std::cout << const_exp->dumpExp(); }
+    std::vector<std::unique_ptr<BaseAST>> const_init_val_list;
+    void dump() const override
+    {
+        if (type == ConstInitValType::const_exp)
+            std::cout << const_exp->dumpExp();
+        else if (type == ConstInitValType::list)
+        {
+            std::cout << "{";
+            for (int i = 0; i < const_init_val_list.size(); i++)
+            {
+                const_init_val_list[i]->dump();
+                if (i != const_init_val_list.size() - 1)std::cout << ",";
+            }
+            std::cout << "} ";
+        }
+        else assert(false);
+    }
     std::string dumpIR() const override
     {
+        assert(type == ConstInitValType::const_exp);
         return std::to_string(const_exp->dumpExp());
+    }
+    std::vector<int> dumpList(std::vector<int> widths) const override
+    {
+        std::vector<int> ret;
+        if (widths.size() == 1)
+        {
+            for (auto&& const_init_val : const_init_val_list)
+            {
+                assert(const_init_val->get_ident() == "const_exp");
+                ret.push_back(std::stoi(const_init_val->dumpIR()));
+                const_list_num++;
+            }
+            int num_zeros = widths[0] - ret.size();
+            for (int i = 0; i < num_zeros; i++)
+            {
+                ret.push_back(0); const_list_num++;
+            }
+            return ret;
+        }
+        std::vector<int> products = widths;
+        for (int i = products.size() - 2; i >= 0; i--)
+            products[i] *= products[i + 1];
+        int total_size = products[0];
+        for (auto&& const_init_val : const_init_val_list)
+            if (const_init_val->get_ident() == "const_exp")
+            {
+                ret.push_back(std::stoi(const_init_val->dumpIR()));
+                const_list_num++; continue;
+            }
+            else if (const_init_val->get_ident() == "list")
+            {
+                int init_num;
+                for (init_num = 1; init_num < widths.size(); init_num++)
+                    if (const_list_num % products[init_num] == 0)break;
+                    else if (init_num == widths.size() - 1)assert(false);
+                std::vector<int> rec = std::vector<int>(widths.begin() +
+                    init_num, widths.end());
+                std::vector<int> tmp = const_init_val->dumpList(rec);
+                ret.insert(ret.end(), tmp.begin(), tmp.end());
+            }
+            else assert(false);
+        int num_zeros = total_size - ret.size();
+        for (int i = 0; i < num_zeros; i++)
+        {
+            ret.push_back(0); const_list_num++;
+        }
+        return ret;
+    }
+    std::string get_ident() const override
+    {
+        if (type == ConstInitValType::const_exp)return "const_exp";
+        else if (type == ConstInitValType::list)return "list";
+        else assert(false);
     }
 };
 
@@ -1046,6 +1367,7 @@ class VarDefAST : public BaseAST
 public:
     std::string ident;
     bool has_init_val;
+    std::vector<std::unique_ptr<BaseAST>> exp_list;
     std::unique_ptr<BaseAST> init_val;
     void dump() const override
     {
@@ -1057,37 +1379,153 @@ public:
         }
         std::cout << "} ";
     }
+    void dumpListType(std::vector<int> widths) const
+    {
+        if (widths.size() == 1)
+        {
+            std::cout << "[i32, " << widths[0] << "]"; return;
+        }
+        std::vector<int> rec = std::vector<int>(widths.begin() + 1,
+            widths.end());
+        std::cout << "["; dumpListType(rec);
+        std::cout << ", " << widths.front() << "]";
+    }
+    int calIndex(std::vector<int> widths, int depth)
+    {
+        int total_index = var_list_num;
+        std::vector<int> products = widths;
+        for (int i = products.size() - 2; i >= 0; i--)
+            products[i] *= products[i + 1];
+        std::vector<int> remainders = widths;
+        for (int i = 0; i < remainders.size() - 1; i++)
+        {
+            remainders[i] = total_index / products[i + 1];
+            total_index -= remainders[i] * products[i + 1];
+        }
+        remainders[remainders.size() - 1] = total_index;
+        return remainders[depth];
+    }
+    void dumpListInit(std::string prev, std::vector<int> widths, int depth,
+        std::vector<int> init_list) const
+    {
+        if (depth >= widths.size())
+        {
+            std::cout << "\tstore " << init_list[var_list_num++] << ", " <<
+                prev << std::endl;
+            return;
+        }
+        for (int i = 0; i < widths[depth]; i++)
+        {
+            std::string result_var = "%" + std::to_string(symbol_num++);
+            std::cout << '\t' << result_var << " = getelemptr " << prev << ", "
+                << i << std::endl;
+            dumpListInit(result_var, widths, depth + 1, init_list);
+        }
+    }
+    void printInitList(std::vector<int> widths, int depth,
+        std::vector<int> init_list) const
+    {
+        if (depth >= widths.size())
+        {
+            std::cout << init_list[var_list_num++]; return;
+        }
+        std::cout << "{";
+        for (int i = 0; i < widths[depth]; i++)
+        {
+            printInitList(widths, depth + 1, init_list);
+            if (i != widths[depth] - 1)std::cout << ", ";
+        }
+        std::cout << "}";
+    }
     std::string dumpIR() const override
     {
-        std::string var_name = "@" + ident;
-        std::string name = var_name + "_" +
-            std::to_string(var_num[var_name]++);
-        std::cout << '\t' << name << " = alloc i32" << std::endl;
-        symbol_tables.back()[ident] = name;
-        if (has_init_val)
+        if (exp_list.empty())
         {
-            std::string val_var = init_val->dumpIR();
-            std::cout << "\tstore " << val_var << ", " << name << std::endl;
+            std::string var_name = "@" + ident;
+            std::string name = var_name + "_" +
+                std::to_string(var_num[var_name]++);
+            std::cout << '\t' << name << " = alloc i32" << std::endl;
+            symbol_tables.back()[ident] = name;
+            if (has_init_val)
+            {
+                std::string val_var = init_val->dumpIR();
+                std::cout << "\tstore " << val_var << ", " << name <<
+                    std::endl;
+            }
+        }
+        else
+        {
+            std::vector<int> widths, init_list;
+            for (auto&& exp : exp_list)
+                widths.push_back(std::stoi(exp->dumpIR()));
+            std::string var_name = "@" + ident;
+            std::string name = var_name + "_" +
+                std::to_string(var_num[var_name]++);
+            symbol_tables.back()[ident] = name;
+            is_list[name] = 1;
+            list_dim[name] = widths.size();
+            std::cout << '\t' << name << " = alloc ";
+            dumpListType(widths);
+            std::cout << std::endl;
+            if (has_init_val)
+            {
+                var_list_num = 0;
+                init_list = init_val->dumpList(widths);
+                var_list_num = 0;
+                for (int i = 0; i < widths[0]; i++)
+                {
+                    std::string result_var = "%" +
+                        std::to_string(symbol_num++);
+                    std::cout << '\t' << result_var << " = getelemptr " << name
+                        << ", " << i << std::endl;
+                    dumpListInit(result_var, widths, 1, init_list);
+                }
+            }
         }
         return "";
     }
     int dumpExp() const override
     {
-        std::string var_name = "@" + ident;
-        std::string name = var_name + "_" +
-            std::to_string(var_num[var_name]++);
-        symbol_tables.back()[ident] = name;
-        if (has_init_val)
+        if (exp_list.empty())
         {
-            std::string val_var = init_val->dumpIR();
+            std::string var_name = "@" + ident;
+            std::string name = var_name + "_" +
+                std::to_string(var_num[var_name]++);
+            symbol_tables.back()[ident] = name;
             std::cout << "global " << name << " = alloc i32, ";
-            if (val_var[0] == '@' || val_var[0] == '%')assert(false);
-            else if (val_var != "0")std::cout << val_var << std::endl;
+            if (has_init_val)
+            {
+                std::string val_var = init_val->dumpIR();
+                if (val_var[0] == '@' || val_var[0] == '%')assert(false);
+                else if (val_var != "0")std::cout << val_var << std::endl;
+                else std::cout << "zeroinit" << std::endl;
+            }
             else std::cout << "zeroinit" << std::endl;
         }
         else
-            std::cout << "global " << name << " = alloc i32, zeroinit" <<
-                std::endl;
+        {
+            std::vector<int> widths, init_list;
+            for (auto&& exp : exp_list)
+                widths.push_back(std::stoi(exp->dumpIR()));
+            std::string var_name = "@" + ident;
+            std::string name = var_name + "_" +
+                std::to_string(var_num[var_name]++);
+            symbol_tables.back()[ident] = name;
+            is_list[name] = 1;
+            list_dim[name] = widths.size();
+            std::cout << "global " << name << " = alloc ";
+            dumpListType(widths);
+            if (has_init_val)
+            {
+                var_list_num = 0;
+                init_list = init_val->dumpList(widths);
+                var_list_num = 0;
+                std::cout << ", ";
+                printInitList(widths, 0, init_list);
+                std::cout << std::endl;
+            }
+            else std::cout << ", zeroinit" << std::endl;
+        }
         return 0;
     }
 };
@@ -1096,7 +1534,80 @@ public:
 class InitValAST : public BaseAST
 {
 public:
+    InitValType type;
     std::unique_ptr<BaseAST> exp;
-    void dump() const override { exp->dump(); }
-    std::string dumpIR() const override { return exp->dumpIR(); }
+    std::vector<std::unique_ptr<BaseAST>> init_val_list;
+    void dump() const override
+    {
+        if (type == InitValType::exp)exp->dump();
+        else if (type == InitValType::list)
+        {
+            std::cout << "{";
+            for (int i = 0; i < init_val_list.size(); i++)
+            {
+                init_val_list[i]->dump();
+                if (i != init_val_list.size() - 1)std::cout << ",";
+            }
+            std::cout << "} ";
+        }
+        else assert(false);
+    }
+    std::string dumpIR() const override
+    {
+        assert(type == InitValType::exp);
+        return exp->dumpIR();
+    }
+    std::vector<int> dumpList(std::vector<int> widths) const override
+    {
+        std::vector<int> ret;
+        if (widths.size() == 1)
+        {
+            for (auto&& init_val : init_val_list)
+            {
+                assert(init_val->get_ident() == "exp");
+                ret.push_back(std::stoi(init_val->dumpIR()));
+                var_list_num++;
+            }
+            int num_zeros = widths[0] - ret.size();
+            for (int i = 0; i < num_zeros; i++)
+            {
+                ret.push_back(0); var_list_num++;
+            }
+            return ret;
+        }
+        std::vector<int> products = widths;
+        for (int i = products.size() - 2; i >= 0; i--)
+            products[i] *= products[i + 1];
+        int total_size = products[0];
+        for (auto&& init_val : init_val_list)
+            if (init_val->get_ident() == "exp")
+            {
+                ret.push_back(std::stoi(init_val->dumpIR()));
+                var_list_num++; continue;
+            }
+            else if (init_val->get_ident() == "list")
+            {
+                int init_num;
+                for (init_num = 1; init_num < widths.size(); init_num++)
+                    if (var_list_num % products[init_num] == 0)break;
+                    else if (init_num == widths.size() - 1)assert(false);
+                std::vector<int> rec = std::vector<int>(widths.begin() +
+                    init_num, widths.end());
+                std::vector<int> tmp = init_val->dumpList(rec);
+                ret.insert(ret.end(), tmp.begin(), tmp.end());
+            }
+            else assert(false);
+        int num_zeros = total_size - ret.size();
+        for (int i = 0; i < num_zeros; i++)
+        {
+            ret.push_back(0); var_list_num++;
+        }
+        return ret;
+    }
+    std::string get_ident() const override
+    {
+        if (type == InitValType::exp)return "exp";
+        else if (type == InitValType::list)return "list";
+        else assert(false);
+    }
 };

@@ -39,6 +39,7 @@ using namespace std;
 %type <ast_val> ConstInitVal BlockItem ConstExp VarDecl VarDef InitVal
 %type <ast_val> SimpleStmt OpenStmt ClosedStmt CompUnitList FuncFParam
 %type <vec_val> BlockItemList ConstDefList VarDefList FuncFParams FuncRParams
+%type <vec_val> ConstExpList ConstInitValList InitValList ExpList
 %type <int_val> Number
 %type <str_val> LVal Type
 
@@ -115,8 +116,26 @@ FuncFParams
 FuncFParam
     : Type IDENT {
         auto param = new FuncFParamAST();
+        param->type = FuncFParamType::var;
         param->b_type = *unique_ptr<string>($1);
         param->ident = *unique_ptr<string>($2);
+        $$ = param;
+    }
+    | Type IDENT '[' ']' {
+        auto param = new FuncFParamAST();
+        param->type = FuncFParamType::list;
+        param->b_type = *unique_ptr<string>($1);
+        param->ident = *unique_ptr<string>($2);
+        $$ = param;
+    }
+    | Type IDENT '[' ']' ConstExpList {
+        auto param = new FuncFParamAST();
+        param->type = FuncFParamType::list;
+        param->b_type = *unique_ptr<string>($1);
+        param->ident = *unique_ptr<string>($2);
+        vector<unique_ptr<BaseAST>> *v_ptr = ($5);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            param->const_exp_list.push_back(move(*it));
         $$ = param;
     }
     ;
@@ -222,6 +241,16 @@ SimpleStmt
         stmt->type = SimpleStmtType::lval;
         stmt->lval = *unique_ptr<string>($1);
         stmt->block_exp = unique_ptr<BaseAST>($3);
+        $$ = stmt;
+    }
+    | IDENT ExpList '=' Exp ';' {
+        auto stmt = new SimpleStmtAST();
+        stmt->type = SimpleStmtType::list;
+        stmt->lval = *unique_ptr<string>($1);
+        vector<unique_ptr<BaseAST>> *v_ptr = ($2);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            stmt->exp_list.push_back(move(*it));
+        stmt->block_exp = unique_ptr<BaseAST>($4);
         $$ = stmt;
     }
     | Block {
@@ -408,6 +437,15 @@ PrimaryExp
         primary_exp->lval = *unique_ptr<string>($1);
         $$ = primary_exp;
     }
+    | IDENT ExpList {
+        auto primary_exp = new PrimaryExpAST();
+        primary_exp->type = PrimaryExpType::list;
+        primary_exp->lval = *unique_ptr<string>($1);
+        vector<unique_ptr<BaseAST>> *v_ptr = ($2);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            primary_exp->exp_list.push_back(move(*it));
+        $$ = primary_exp;
+    }
     ;
 
 Decl
@@ -443,12 +481,35 @@ ConstDef
         const_def->const_init_val = unique_ptr<BaseAST>($3);
         $$ = const_def;
     }
+    | IDENT ConstExpList '=' ConstInitVal {
+        auto const_def = new ConstDefAST();
+        const_def->ident = *unique_ptr<string>($1);
+        vector<unique_ptr<BaseAST>> *v_ptr = ($2);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            const_def->const_exp_list.push_back(move(*it));
+        const_def->const_init_val = unique_ptr<BaseAST>($4);
+        $$ = const_def;
+    }
     ;
 
 ConstInitVal
     : ConstExp {
         auto const_init_val = new ConstInitValAST();
+        const_init_val->type = ConstInitValType::const_exp;
         const_init_val->const_exp = unique_ptr<BaseAST>($1);
+        $$ = const_init_val;
+    }
+    | '{' '}' {
+        auto const_init_val = new ConstInitValAST();
+        const_init_val->type = ConstInitValType::list;
+        $$ = const_init_val;
+    }
+    | '{' ConstInitValList '}' {
+        auto const_init_val = new ConstInitValAST();
+        const_init_val->type = ConstInitValType::list;
+        vector<unique_ptr<BaseAST>> *v_ptr = ($2);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            const_init_val->const_init_val_list.push_back(move(*it));
         $$ = const_init_val;
     }
     ;
@@ -501,12 +562,45 @@ VarDef
         var_def->init_val = unique_ptr<BaseAST>($3);
         $$ = var_def;
     }
+    | IDENT ConstExpList {
+        auto var_def = new VarDefAST();
+        var_def->ident = *unique_ptr<string>($1);
+        var_def->has_init_val = false;
+        vector<unique_ptr<BaseAST>> *v_ptr = ($2);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            var_def->exp_list.push_back(move(*it));
+        $$ = var_def;
+    }
+    | IDENT ConstExpList '=' InitVal {
+        auto var_def = new VarDefAST();
+        var_def->ident = *unique_ptr<string>($1);
+        var_def->has_init_val = true;
+        vector<unique_ptr<BaseAST>> *v_ptr = ($2);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            var_def->exp_list.push_back(move(*it));
+        var_def->init_val = unique_ptr<BaseAST>($4);
+        $$ = var_def;
+    }
     ;
 
 InitVal
     : Exp {
         auto init_val = new InitValAST();
+        init_val->type = InitValType::exp;
         init_val->exp = unique_ptr<BaseAST>($1);
+        $$ = init_val;
+    }
+    | '{' '}' {
+        auto init_val = new InitValAST();
+        init_val->type = InitValType::list;
+        $$ = init_val;
+    }
+    | '{' InitValList '}' {
+        auto init_val = new InitValAST();
+        init_val->type = InitValType::list;
+        vector<unique_ptr<BaseAST>> *v_ptr = ($2);
+        for (auto it = v_ptr->begin(); it != v_ptr->end(); it++)
+            init_val->init_val_list.push_back(move(*it));
         $$ = init_val;
     }
     ;
@@ -549,6 +643,57 @@ VarDefList
     }
     ;
 
+ConstExpList
+    : '[' ConstExp ']' {
+        vector<unique_ptr<BaseAST>> *v = new vector<unique_ptr<BaseAST>>;
+        v->push_back(unique_ptr<BaseAST>($2));
+        $$ = v;
+    }
+    | ConstExpList '[' ConstExp ']' {
+        vector<unique_ptr<BaseAST>> *v = ($1);
+        v->push_back(unique_ptr<BaseAST>($3));
+        $$ = v;
+    }
+    ;
+
+ExpList
+    : '[' Exp ']' {
+        vector<unique_ptr<BaseAST>> *v = new vector<unique_ptr<BaseAST>>;
+        v->push_back(unique_ptr<BaseAST>($2));
+        $$ = v;
+    }
+    | ExpList '[' Exp ']' {
+        vector<unique_ptr<BaseAST>> *v = ($1);
+        v->push_back(unique_ptr<BaseAST>($3));
+        $$ = v;
+    }
+    ;
+
+ConstInitValList
+    : ConstInitVal {
+        vector<unique_ptr<BaseAST>> *v = new vector<unique_ptr<BaseAST>>;
+        v->push_back(unique_ptr<BaseAST>($1));
+        $$ = v;
+    }
+    | ConstInitValList ',' ConstInitVal {
+        vector<unique_ptr<BaseAST>> *v = ($1);
+        v->push_back(unique_ptr<BaseAST>($3));
+        $$ = v;
+    }
+    ;
+
+InitValList
+    : InitVal {
+        vector<unique_ptr<BaseAST>> *v = new vector<unique_ptr<BaseAST>>;
+        v->push_back(unique_ptr<BaseAST>($1));
+        $$ = v;
+    }
+    | InitValList ',' InitVal {
+        vector<unique_ptr<BaseAST>> *v = ($1);
+        v->push_back(unique_ptr<BaseAST>($3));
+        $$ = v;
+    }
+    ;
 
 Number
     : INT_CONST {
