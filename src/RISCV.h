@@ -92,7 +92,7 @@ void Visit(const koopa_raw_function_t &func)
             if (inst->ty->tag != KOOPA_RTT_UNIT)
             {
                 if (inst->kind.tag == KOOPA_RVT_ALLOC)
-                    stack_size += cal_size(inst->ty);
+                    stack_size += cal_size(inst->ty->data.pointer.base);
                 else stack_size += 4;
             }
             if (inst->kind.tag == KOOPA_RVT_CALL)
@@ -221,7 +221,8 @@ Reg Visit(const koopa_raw_value_t &value)
         break;
     case KOOPA_RVT_ALLOC:
         result_var.reg_offset = stack_top;
-        stack_top += cal_size(value->ty);
+        assert(value->ty->tag == KOOPA_RTT_POINTER);
+        stack_top += cal_size(value->ty->data.pointer.base);
         value_map[value] = result_var;
         break;
     case KOOPA_RVT_GLOBAL_ALLOC:
@@ -821,8 +822,7 @@ void clear_registers(bool save_temps)
 int cal_size(const koopa_raw_type_t &ty)
 {
     assert(ty->tag != KOOPA_RTT_UNIT);
-    if (ty->tag == KOOPA_RTT_POINTER)return cal_size(ty->data.pointer.base);
-    else if (ty->tag == KOOPA_RTT_ARRAY)
+    if (ty->tag == KOOPA_RTT_ARRAY)
     {
         int prev = cal_size(ty->data.array.base);
         int len = ty->data.array.len;
