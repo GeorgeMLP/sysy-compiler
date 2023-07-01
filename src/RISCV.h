@@ -113,15 +113,28 @@ void Visit(const koopa_raw_function_t &func)
         std::cout << "\taddi  sp, sp, -" << stack_size << std::endl;
     else if (stack_size > 2048)
     {
-        struct Reg tmp_var = {-1, -1};
-        tmp_var.reg_name = find_reg(0);
+        struct Reg tmp_var = {find_reg(0), -1};
         std::cout << "\tli    " << reg_names[tmp_var.reg_name] << ", -" <<
             stack_size << std::endl;
         std::cout << "\tadd   sp, sp, " << reg_names[tmp_var.reg_name] <<
             std::endl;
     }
     if (restore_ra)
-        std::cout << "\tsw    ra, " << stack_size - 4 << "(sp)" << std::endl;
+    {
+        if (stack_size - 4 >= -2048 && stack_size - 4 <= 2047)
+            std::cout << "\tsw    ra, " << stack_size - 4 << "(sp)" <<
+                std::endl;
+        else
+        {
+            struct Reg tmp_var = {find_reg(0), -1};
+            std::cout << "\tli    " << reg_names[tmp_var.reg_name] << ", " <<
+                stack_size - 4 << std::endl;
+            std::cout << "\tadd   " << reg_names[tmp_var.reg_name] << ", sp, "
+                << reg_names[tmp_var.reg_name] << std::endl;
+            std::cout << "\tsw    ra, (" << reg_names[tmp_var.reg_name] << ")"
+                << std::endl;
+        }
+    }
     for (size_t i = 0; i < func->params.len; i++)
     {
         auto ptr = func->params.buffer[i];
@@ -147,6 +160,7 @@ void Visit(const koopa_raw_function_t &func)
     stack_size = stack_top = 0;
     for (int i = 0; i < 16; i++)reg_stats[i] = 0;
     value_map.clear();
+    restore_ra = false;
     std::cout << std::endl;
 }
 
@@ -168,8 +182,23 @@ Reg Visit(const koopa_raw_value_t &value)
         {
             int reg_name = find_reg(1);
             value_map[value].reg_name = reg_name;
-            std::cout << "\tlw    " << reg_names[reg_name] << ", " <<
-                value_map[value].reg_offset << "(sp)" << std::endl;
+            int reg_offset = value_map[value].reg_offset;
+            if (reg_offset >= -2048 && reg_offset <= 2047)
+                std::cout << "\tlw    " << reg_names[reg_name] << ", " <<
+                    reg_offset << "(sp)" << std::endl;
+            else
+            {
+                int old_stat = reg_stats[reg_name];
+                reg_stats[reg_name] = 2;
+                struct Reg tmp_var = {find_reg(0), -1};
+                reg_stats[reg_name] = old_stat;
+                std::cout << "\tli    " << reg_names[tmp_var.reg_name] << ", "
+                    << reg_offset << std::endl;
+                std::cout << "\tadd   " << reg_names[tmp_var.reg_name] <<
+                    ", sp, " << reg_names[tmp_var.reg_name] << std::endl;
+                std::cout << "\tlw    " << reg_names[reg_name] << ", (" <<
+                    reg_names[tmp_var.reg_name] << ")" << std::endl;
+            }
         }
         present_value = old_value;
         return value_map[value];
@@ -253,10 +282,20 @@ void Visit(const koopa_raw_return_t &ret)
     }
     clear_registers(false);
     if (restore_ra)
-        std::cout << "\tlw    ra, " << stack_size - 4 << "(sp)" << std::endl;
-    if (stack_size > 0 && stack_size <= 2048)
+    {
+        if (stack_size - 4 >= -2048 && stack_size - 4 <= 2047)
+            std::cout << "\tlw    ra, " << stack_size - 4 << "(sp)" <<
+                std::endl;
+        else
+        {
+            std::cout << "\tli    t0, " << stack_size - 4 << std::endl;
+            std::cout << "\tadd   t0, sp, t0" << std::endl;
+            std::cout << "\tlw    ra, (t0)" << std::endl;
+        }
+    }
+    if (stack_size > 0 && stack_size <= 2047)
         std::cout << "\taddi  sp, sp, " << stack_size << std::endl;
-    else if (stack_size > 2048)
+    else if (stack_size > 2047)
     {
         std::cout << "\tli    t0, " << stack_size << std::endl;
         std::cout << "\tadd   sp, sp, t0" << std::endl;
@@ -399,7 +438,8 @@ Reg Visit(const koopa_raw_load_t &load)
             reg_names[reg_name] << ")" << std::endl;
         return result_var;
     }
-    else if (src->kind.tag == KOOPA_RVT_GET_ELEM_PTR)
+    else if (src->kind.tag == KOOPA_RVT_GET_ELEM_PTR ||
+        src->kind.tag == KOOPA_RVT_GET_PTR)
     {
         struct Reg result_var = {find_reg(2), -1};
         struct Reg src_var = Visit(load.src);
@@ -449,7 +489,8 @@ void Visit(const koopa_raw_store_t &store)
             reg_names[tmp_var.reg_name] << ")" << std::endl;
         return;
     }
-    else if (dest->kind.tag == KOOPA_RVT_GET_ELEM_PTR)
+    else if (dest->kind.tag == KOOPA_RVT_GET_ELEM_PTR ||
+        dest->kind.tag == KOOPA_RVT_GET_PTR)
     {
         int old_stat = reg_stats[value.reg_name];
         reg_stats[value.reg_name] = 2;
@@ -519,6 +560,7 @@ Reg Visit(const koopa_raw_call_t &call)
 {
     struct Reg result_var = { 7, -1 };
     clear_registers();
+    std::vector<int> old_stats;
     for (size_t i = 0; i < call.args.len; i++)
     {
         auto ptr = call.args.buffer[i];
@@ -530,6 +572,8 @@ Reg Visit(const koopa_raw_call_t &call)
             if (arg_var.reg_name != i + 7)
                 std::cout << "\tmv    " << reg_names[i + 7] << ", " <<
                     reg_names[arg_var.reg_name] << std::endl;
+            old_stats.push_back(reg_stats[i + 7]);
+            reg_stats[i + 7] = 2;
         }
         else if ((i - 8) * 4 >= -2048 && (i - 8) * 4 <= 2047)
             std::cout << "\tsw    " << reg_names[arg_var.reg_name] << ", " <<
@@ -548,6 +592,7 @@ Reg Visit(const koopa_raw_call_t &call)
                 reg_names[tmp_var.reg_name] << ")" << std::endl;
         }
     }
+    for (int i = 0; i < call.args.len; i++)reg_stats[i + 7] = old_stats[i];
     std::cout << "\tcall  " << call.callee->name + 1 << std::endl;
     return result_var;
 }
@@ -640,17 +685,22 @@ Reg Visit(const koopa_raw_get_elem_ptr_t &get_elem_ptr)
     int total_size = cal_size(arr), len = arr->data.array.len;
     assert(total_size % len == 0);
     int elem_size = total_size / len;
-    struct Reg ind_var = Visit(get_elem_ptr.index);
-    int ind_reg = ind_var.reg_name;
-    int ind_old_stat = reg_stats[ind_reg];
-    reg_stats[ind_reg] = 2;
-    struct Reg tmp_var = {find_reg(0), -1};
-    reg_stats[ind_reg] = ind_old_stat;
+    struct Reg ind_var = Visit(get_elem_ptr.index), tmp_var;
+    if (elem_size != 0 && ind_var.reg_name != 15)
+    {
+        int ind_reg = ind_var.reg_name;
+        int ind_old_stat = reg_stats[ind_reg];
+        reg_stats[ind_reg] = 2;
+        tmp_var = {find_reg(0), -1};
+        reg_stats[ind_reg] = ind_old_stat;
+        std::cout << "\tli    " << reg_names[tmp_var.reg_name] << ", " <<
+            elem_size << std::endl;
+        std::cout << "\tmul   " << reg_names[tmp_var.reg_name] << ", " <<
+            reg_names[tmp_var.reg_name] << ", " << reg_names[ind_reg] <<
+            std::endl;
+    }
+    else tmp_var = {15, -1};
     reg_stats[result_var.reg_name] = 1;
-    std::cout << "\tli    " << reg_names[tmp_var.reg_name] << ", " << elem_size
-        << std::endl;
-    std::cout << "\tmul   " << reg_names[tmp_var.reg_name] << ", " <<
-        reg_names[tmp_var.reg_name] << ", " << reg_names[ind_reg] << std::endl;
     if (get_elem_ptr.src->name && get_elem_ptr.src->name[0] == '@')
         std::cout << "\tadd   " << reg_names[result_var.reg_name] << ", " <<
             reg_names[result_var.reg_name] << ", " <<
@@ -671,36 +721,25 @@ Reg Visit(const koopa_raw_get_ptr_t &get_ptr)
     struct Reg src_var = value_map[get_ptr.src];
     koopa_raw_type_t arr = get_ptr.src->ty->data.pointer.base;
     struct Reg result_var = {find_reg(2), -1};
-    int src_reg, src_old_stat;
-    int offset = src_var.reg_offset;
-    assert(offset >= 0);  // variables have positive offset
-    if (offset >= -2048 && offset <= 2047)
-        std::cout << "\taddi  " << reg_names[result_var.reg_name] <<
-            ", sp, " << offset << std::endl;
-    else
+    int elem_size = cal_size(arr);
+    struct Reg ind_var = Visit(get_ptr.index), tmp_var;
+    if (elem_size != 0 && ind_var.reg_name != 15)
     {
-        struct Reg tmp_var = {find_reg(0), -1};
+        int ind_reg = ind_var.reg_name;
+        int ind_old_stat = reg_stats[ind_reg];
+        reg_stats[ind_reg] = 2;
+        tmp_var = {find_reg(0), -1};
+        reg_stats[ind_reg] = ind_old_stat;
         std::cout << "\tli    " << reg_names[tmp_var.reg_name] << ", " <<
-            offset << std::endl;
-        std::cout << "\tadd   " << reg_names[result_var.reg_name] <<
-            ", sp, " << reg_names[tmp_var.reg_name] << std::endl;
+            elem_size << std::endl;
+        std::cout << "\tmul   " << reg_names[tmp_var.reg_name] << ", " <<
+            reg_names[tmp_var.reg_name] << ", " << reg_names[ind_reg] <<
+            std::endl;
     }
-    int total_size = cal_size(arr), len = arr->data.array.len;
-    assert(total_size % len == 0);
-    int elem_size = total_size / len;
-    struct Reg ind_var = Visit(get_ptr.index);
-    int ind_reg = ind_var.reg_name;
-    int ind_old_stat = reg_stats[ind_reg];
-    reg_stats[ind_reg] = 2;
-    struct Reg tmp_var = {find_reg(0), -1};
-    reg_stats[ind_reg] = ind_old_stat;
+    else tmp_var = {15, -1};
     reg_stats[result_var.reg_name] = 1;
-    std::cout << "\tli    " << reg_names[tmp_var.reg_name] << ", " << elem_size
-        << std::endl;
-    std::cout << "\tmul   " << reg_names[tmp_var.reg_name] << ", " <<
-    reg_names[tmp_var.reg_name] << ", " << reg_names[ind_reg] << std::endl;
     std::cout << "\tadd   " << reg_names[result_var.reg_name] << ", " <<
-        reg_names[result_var.reg_name] << ", " <<
+        reg_names[src_var.reg_name] << ", " <<
         reg_names[tmp_var.reg_name] << std::endl;
     return result_var;
 }
