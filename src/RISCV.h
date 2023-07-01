@@ -592,8 +592,9 @@ Reg Visit(const koopa_raw_call_t &call)
                 reg_names[tmp_var.reg_name] << ")" << std::endl;
         }
     }
-    for (int i = 0; i < call.args.len; i++)reg_stats[i + 7] = old_stats[i];
+    for (int i = 0; i < old_stats.size(); i++)reg_stats[i + 7] = old_stats[i];
     std::cout << "\tcall  " << call.callee->name + 1 << std::endl;
+    clear_registers(false);
     return result_var;
 }
 
@@ -820,10 +821,7 @@ void clear_registers(bool save_temps)
 int cal_size(const koopa_raw_type_t &ty)
 {
     assert(ty->tag != KOOPA_RTT_UNIT);
-    if (ty->tag == KOOPA_RTT_POINTER)
-    {
-        return cal_size(ty->data.pointer.base);
-    }
+    if (ty->tag == KOOPA_RTT_POINTER)return cal_size(ty->data.pointer.base);
     else if (ty->tag == KOOPA_RTT_ARRAY)
     {
         int prev = cal_size(ty->data.array.base);

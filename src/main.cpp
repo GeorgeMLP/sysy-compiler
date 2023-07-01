@@ -33,7 +33,7 @@ int main(int argc, const char *argv[])
     assert(!ret);
 
     if (string(mode) == "-koopa")ast->dumpIR();
-    else if (string(mode) == "-riscv")
+    else if (string(mode) == "-riscv" || string(mode) == "-perf")
     {
         stringstream ss;
         streambuf* cout_buf = cout.rdbuf();

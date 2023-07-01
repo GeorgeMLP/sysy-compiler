@@ -1557,6 +1557,11 @@ public:
         assert(type == InitValType::exp);
         return exp->dumpIR();
     }
+    int dumpExp() const override
+    {
+        assert(type == InitValType::exp);
+        return exp->dumpExp();
+    }
     std::vector<int> dumpList(std::vector<int> widths) const override
     {
         std::vector<int> ret;
@@ -1565,7 +1570,7 @@ public:
             for (auto&& init_val : init_val_list)
             {
                 assert(init_val->get_ident() == "exp");
-                ret.push_back(std::stoi(init_val->dumpIR()));
+                ret.push_back(init_val->dumpExp());
                 var_list_num++;
             }
             int num_zeros = widths[0] - ret.size();
@@ -1582,7 +1587,7 @@ public:
         for (auto&& init_val : init_val_list)
             if (init_val->get_ident() == "exp")
             {
-                ret.push_back(std::stoi(init_val->dumpIR()));
+                ret.push_back(init_val->dumpExp());
                 var_list_num++; continue;
             }
             else if (init_val->get_ident() == "list")
