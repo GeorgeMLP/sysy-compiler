@@ -1124,21 +1124,6 @@ public:
         std::cout << "["; dumpListType(rec);
         std::cout << ", " << widths.front() << "]";
     }
-    int calIndex(std::vector<int> widths, int depth)
-    {
-        int total_index = const_list_num;
-        std::vector<int> products = widths;
-        for (int i = products.size() - 2; i >= 0; i--)
-            products[i] *= products[i + 1];
-        std::vector<int> remainders = widths;
-        for (int i = 0; i < remainders.size() - 1; i++)
-        {
-            remainders[i] = total_index / products[i + 1];
-            total_index -= remainders[i] * products[i + 1];
-        }
-        remainders[remainders.size() - 1] = total_index;
-        return remainders[depth];
-    }
     void dumpListInit(std::string prev, std::vector<int> widths, int depth,
         std::vector<int> init_list) const
     {
@@ -1389,21 +1374,6 @@ public:
             widths.end());
         std::cout << "["; dumpListType(rec);
         std::cout << ", " << widths.front() << "]";
-    }
-    int calIndex(std::vector<int> widths, int depth)
-    {
-        int total_index = var_list_num;
-        std::vector<int> products = widths;
-        for (int i = products.size() - 2; i >= 0; i--)
-            products[i] *= products[i + 1];
-        std::vector<int> remainders = widths;
-        for (int i = 0; i < remainders.size() - 1; i++)
-        {
-            remainders[i] = total_index / products[i + 1];
-            total_index -= remainders[i] * products[i + 1];
-        }
-        remainders[remainders.size() - 1] = total_index;
-        return remainders[depth];
     }
     void dumpListInit(std::string prev, std::vector<int> widths, int depth,
         std::vector<int> init_list) const
