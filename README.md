@@ -2,6 +2,8 @@
 
 Compiles SysY into RISC-V. Below is my Chinese version lab report.
 
+PKU Compiler Principles course documents: [PKU Compiler Principles](https://pku-minic.github.io/online-doc/#/).
+
 ## 一、编译器概述
 
 ### 1.1 基本功能
